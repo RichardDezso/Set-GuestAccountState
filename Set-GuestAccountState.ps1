@@ -1,30 +1,23 @@
 <#
 .SYNOPSIS
-  Enable or disable the built-in Guest account safely (with optional admin-group cleanup).
+  Enable or disable the built-in Guest account (Win10/Win11), optional admin-group cleanup.
 
 .DESCRIPTION
-  Resolves the Guest account by SID (RID 501) so it works even if renamed/localized.
-  Supports -WhatIf/-Confirm, audit-only, and optional removal from the local Administrators group.
+  Works on PowerShell 5.1 (default on Win10/11). Resolves Guest by SID (RID 501),
+  so it still works if the account was renamed/localized. Supports -WhatIf/-Confirm.
 
 .PARAMETER Ensure
-  'Disabled' (default) to disable Guest; 'Enabled' to enable Guest.
+  'Disabled' (default) or 'Enabled'.
 
 .PARAMETER AlsoRemoveFromAdministrators
-  When set, ensures Guest is NOT a member of the local Administrators group.
+  If set, ensures Guest is NOT a member of local Administrators.
 
 .PARAMETER AuditOnly
-  Report current Guest state and membership; do not change anything.
-
-.EXAMPLE
-  # Secure default: disable Guest and remove it from Administrators
-  .\Set-GuestAccountState.ps1 -Ensure Disabled -AlsoRemoveFromAdministrators
-
-.EXAMPLE
-  # Just report current state
-  .\Set-GuestAccountState.ps1 -AuditOnly
+  Only report current state/membership; make no changes.
 
 .NOTES
-  Run as Administrator.
+  - Run as Administrator.
+  - Not applicable on Domain Controllers (no local Guest/local groups there).
 #>
 
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='High')]
@@ -46,11 +39,11 @@ function Test-Admin {
 
 function Ensure-LocalAccountsModule {
   if (-not (Get-Command Get-LocalUser -ErrorAction SilentlyContinue)) {
-    throw "The 'Microsoft.PowerShell.LocalAccounts' module is required on this host."
+    throw "The 'Microsoft.PowerShell.LocalAccounts' module is required (present by default on Win10/11)."
   }
 }
 
-# Resolve built-in Administrators group name via well-known SID S-1-5-32-544 (handles localization)
+# Resolve local Administrators group by well-known SID S-1-5-32-544 (handles localization/renames)
 function Get-AdministratorsGroupName {
   try {
     $sid = New-Object System.Security.Principal.SecurityIdentifier "S-1-5-32-544"
@@ -60,16 +53,14 @@ function Get-AdministratorsGroupName {
   }
 }
 
-# Get Guest local user by RID 501 (works if renamed)
+# Get Guest local user by RID 501 (works even if renamed)
 function Get-GuestLocalUser {
   $guest = Get-LocalUser -ErrorAction SilentlyContinue | Where-Object { $_.SID.Value -match '-501$' }
-  if (-not $guest) {
-    throw "Guest account not found on this system."
-  }
+  if (-not $guest) { throw "Guest account not found on this system." }
   return $guest
 }
 
-# Remove Guest from Administrators if present (compare by SID for reliability)
+# Ensure Guest is not in Administrators (compare by SID for reliability)
 function Ensure-GuestNotInAdmins([string]$adminsGroup, [System.Security.Principal.SecurityIdentifier]$guestSid) {
   $member = Get-LocalGroupMember -Group $adminsGroup -ErrorAction SilentlyContinue |
             Where-Object { $_.SID -and $_.SID.Value -eq $guestSid.Value }
@@ -91,8 +82,8 @@ $adminsGroup = Get-AdministratorsGroupName
 $guest = Get-GuestLocalUser
 
 Write-Host "Guest account resolved as: $($guest.Name)  (SID: $($guest.SID.Value))"
-Write-Host "Current state: " -NoNewline
-Write-Host ($guest.Enabled ? "Enabled" : "Disabled")
+Write-Host -NoNewline "Current state: "
+if ($guest.Enabled) { Write-Host "Enabled" } else { Write-Host "Disabled" }
 
 # Audit-only path
 if ($AuditOnly) {
@@ -131,7 +122,7 @@ try {
   exit 1
 }
 
-# Optional: remove from local Administrators
+# Optional cleanup
 if ($AlsoRemoveFromAdministrators) {
   try {
     Ensure-GuestNotInAdmins -adminsGroup $adminsGroup -guestSid $guest.SID
